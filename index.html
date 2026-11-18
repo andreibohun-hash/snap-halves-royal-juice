@@ -288,10 +288,17 @@ const CFG = {
   DOCK_DEAL: 0.55,     // раздача 'miss': после хода со стыковкой половинка падает с этой вероятностью (deal_after_dock_chance; 0 — как до 18.11)
   DOCK_WANT_K: 0.5,    // компенсация лишних раздач на уровнях 'miss': want + K·DOCK_DEAL (+0,275 при 0,55) — иначе поле забивается чужими цветами
   DOCK_HELP_K: 0.4,    // и help × (1 + K·DOCK_DEAL) (×1,22): больше «пар к одинокой». Обе уходят вместе с deal_after_dock_chance = 0
-  DEAL_EACH_UNTIL: 8,  // до какого уровня раздача после каждого хода; дальше — DEAL (deal_each_until_level)
+  DEAL_EACH_UNTIL: 9,  // до какого уровня раздача после каждого хода; дальше — DEAL (deal_each_until_level). 18.11 ночь: 8 → 9 — правило «после хода без стыковки» с 10-го (третий уровень верх/низ), не вместе с новой механикой
+  // --- честная раздача (18.11, planFair; DESIGN «Честная раздача») ---
+  FAIR: true,          // мешок цветов вместо прежнего правила (fair_deal; false — как до 18.11 ночи, с END_GAP_P)
+  BAG_WANT_K: 2,       // «нужных» жетонов в мешке: цветов × want × K (bag_want_k, 0…2) — сколько раздач сверх «каждый цвет по разу» уходит на цвета открытых заказов
+  RUN_MAX: 2,          // один цвет — не больше стольких раздач подряд (same_color_run_max, 1…5)
+  WAIT_MAX: 5,         // нужный заказу цвет приходит не реже чем раз в столько раздач (wanted_wait_max, 2…20)
+  AVOID_INLINE: 0,     // вероятность увести половинку с клетки «напротив пары» (стыковка одним свайпом или сама) на обычную (avoid_inline_chance, 0…1).
+                       // 0 — клетка просто случайная: «напротив» выходит само в ~10 % раздач (+ ~7 % «сама»); увод при планировании почти не снижает это при падении (игрок успевает сходить), а уровни тяжелеют
   HELP_SCALE: 1,       // множитель доли раздач «пара к одинокой» help (help_scale, 0…2; итог не больше 1)
   FIGS_SCALE: 1,       // множитель длины уровней — числа фигур в заказах (figs_scale, 0,5…2)
-  LOOP_FROM: 49,       // после последнего уровня таблицы — по кругу с этого номера (номера на экране продолжают расти)
+  LOOP_FROM: 39,       // после последнего уровня таблицы — по кругу с этого номера (номера на экране продолжают расти); 18.11 ночь: глава 2 с 39-го (было 49)
   BOOST_START: 2,      // сколько каждого бустера (магнит, метла, отмена) лежит в сейве на старте
   REVIVE_PAIRS: 2,     // «Продолжить» после проигрыша: сколько пар под заказ магнит стыкует сам (плюс пустой лоток и метла)
   BOOST_FROM: 5,       // с какого уровня видны бустеры и рекламное место в лотке (до этого игрок учит заказы и лоток)
@@ -432,7 +439,7 @@ const TOUGH = { ...B, role: 'tough', colors: 4, pairs: 4, stones: 1, figs: 12, o
 // Вводные 5–10 (17.11, Андрей: «генерация мягче, приятнее, больше генерить, уровни длиннее»): раздача каждый ход и «под пару» (как урок 4),
 // больше заказов против «мусора»; фигур ×2 (каждый ход раздача — уровень проходится быстрее). Замер — audit/intro.mjs, выбор — DESIGN.
 // 17.11: помощь («под пару», догонялка, help 1) — только до CFG.ASSIST_UNTIL (5-й); дальше help базы 0,85 и обычная клетка призрака (tuneSpec).
-const SOFT = { every: 1, help: B.help, helpAssist: 1, want: 0.9, catchup: 1 };   // catchup 1 — последняя фигура уровня приходит вовремя и без помощи
+const SOFT = { role: 'intro', every: 1, help: B.help, helpAssist: 1, want: 0.9, catchup: 1 };   // catchup 1 — последняя фигура уровня приходит вовремя и без помощи
 const HARD = { ...B, role: 'hard', colors: 5, pairs: 4, stones: 1, figs: 13, osz: 3, want: 0.42, hard: true };
 const LEVELS = [
   // --- глава 1: основа ---
@@ -445,129 +452,137 @@ const LEVELS = [
     { layout: ['.....', '.....', 'hc.CH', '.....', '.....', '.....'], queue: ['h', 'c'], show: 1 } ] },
   // урок раздачи (v0.9): старт — готовая пара под руку и три одинокие половинки; раздача каждый ход (deal: 'each', как в v0.7) и только пары к одиноким,
   // «в ряд» с ними (near): почти каждый ход есть стыковка в один свайп, рука нужна только на первом ходу. audit/lesson4.mjs — замер вариантов
-  { n: 4, layout: ['. . . . .', 'h . . . H', '. . . # .', '. . c . .', '. s . . H'], queue: ['h', 'c', 's', 'h', 'c'], colors: 3, every: 1, help: 1, want: 1, near: true, deal: 'each', lesson: true },
+  // 18.11 ночь (Андрей: «на втором уровне отстойная ситуация после тутора — вот-вот должна появиться нужная половинка, но игра не складывается»):
+  // урок брал вероятность «под пару» из assist_pair_chance (0,3) — первый же призрак после руки вставал правым кругом СЛЕВА от левого (C . c), стыковки нет;
+  // в конце урока «чужой» цвет (END_GAP_P). Теперь урок всегда «под пару» (nearP 1) и без «чужих» — призрак → падает → стыкуется одним свайпом.
+  { n: 4, layout: ['. . . . .', 'h . . . H', '. . . # .', '. . c . .', '. s . . H'], queue: ['h', 'c', 's', 'h', 'c'], colors: 3, every: 1, help: 1, want: 1, near: true, nearP: 1, deal: 'each', lesson: true },
+  // 18.11 ночь (Андрей: «давай верх-низ введём на 7–8, на 11–14 мёд, и остальные так же подвинем механики»): вводные 3–6 (было 3–8), дальше блоки по 4:
+  // урок → лёгкий → средний → «сложный» (верх/низ — урок → лёгкий → средний → сложнее). Раздача «после хода без стыковки» — с 10-го (deal_each_until_level 9),
+  // на третьем уровне верх/низ, а не на первом с новой механикой. Освободившиеся 10 номеров — два новых блока смесей во второй главе (Q, R).
+  // Убраны из главы 1 (n — внутренний номер): вводные 9, 10; «сложнее» блоков мёда 19, радужной 24, ящиков 29, цепей 34, таймера 39; «сложный» верх/низ 15; лоток 42; экзамен 48.
   { n: 5,  ...B, ...SOFT, colors: 3, pairs: 3, stones: 1, figs: 13, osz: 1, seed: 0 },   // 18.11: помощь реже — короче (было 17)
-  { n: 6,  ...B, ...SOFT, colors: 3, pairs: 4, stones: 1, figs: 14, osz: 2, seed: 2 },   // было 18
-  { n: 7,  ...B, ...SOFT, colors: 3, pairs: 4, stones: 2, figs: 15, osz: 2, seed: 16 },  // было 19
-  { n: 8,  ...B, ...SOFT, colors: 4, pairs: 4, stones: 1, figs: 10, osz: 2, seed: 22 },   // 17.11: с 6-го без помощи раздачи — короче (было 20 фигур), сид заново
-  { n: 9,  ...B, ...SOFT, colors: 4, pairs: 4, stones: 1, figs: 13, osz: 2, seed: 10 },   // было 22 фигуры
-  { n: 10, ...B, ...SOFT, colors: 3, pairs: 4, stones: 1, figs: 14, osz: 3, seed: 6 },    // было 23 фигуры
-  // --- A. верх/низ ---
+  { n: 6,  ...B, ...SOFT, colors: 3, pairs: 4, stones: 1, figs: 14, osz: 2, seed: 0 },   // было 18
+  { n: 7,  ...B, ...SOFT, colors: 3, pairs: 4, stones: 2, figs: 15, osz: 2, seed: 0 },  // было 19
+  { n: 8,  ...B, ...SOFT, colors: 4, pairs: 4, stones: 1, figs: 10, osz: 2, seed: 18 },   // 17.11: с 6-го без помощи раздачи — короче (было 20 фигур), сид заново
+  // --- A. верх/низ (7–10) ---
   { n: 11, layout: ['. . h^ . .', '. . . . .', 's . . . S', '. . . . .', '. . H^ . .'], queue: ['h', 's'], every: 0, lesson: true },
-  { n: 12, ...EASY,  vert: 0.5, seed: 1 },
-  { n: 13, ...MID,   vert: 0.5, seed: 11 },
-  { n: 14, ...TOUGH, want: 0.46, vert: 0.5, seed: 31 },
-  { n: 15, ...HARD,  want: 0.55, vert: 0.5, seed: 4 },
-  // --- B. мёд ---
+  { n: 12, ...EASY,  vert: 0.5, seed: 19 },
+  { n: 13, ...MID,   vert: 0.5, seed: 19 },
+  { n: 14, ...TOUGH, want: 0.46, vert: 0.5, seed: 24 },
+  // --- B. мёд (11–14) ---
   // урок мёда (уровень 14) — два шага на одном поле (18.11, Андрей: «сначала свайпаем в мёд — там чётко видно, что остановилось; а потом к ней
   // присоединяем вторую половину»): 1) сердце съезжает по пустому столбцу и встаёт на мёде посередине (без мёда доехало бы до низа) — без стыковки;
   // 2) правая половинка подъезжает к нему справа. В один ход не решается (test.mjs). hand — ходы руки [клетка, направление 0→ 1← 2↓ 3↑]:
   // солвер на шаге 2 предпочёл бы снова двинуть сердце с мёда, а урок показывает «приставь вторую половинку».
   { n: 16, layout: ['. . . . .', '. . h . .', '. . . . .', '. . ~ . H', '. . . . .', '. . . . .'], queue: ['h'], every: 0, lesson: true, hand: [[7, 2], [19, 1]] },
-  { n: 17, ...EASY,  honey: 3, seed: 0 },
-  { n: 18, ...MID,   honey: 4, seed: 7 },
-  { n: 19, ...TOUGH, honey: 4, seed: 14 },
-  { n: 20, ...HARD,  want: 0.52, honey: 3, vert: 0.5, seed: 7 },
-  // --- C. радужная ---
+  { n: 17, ...EASY,  honey: 3, seed: 4 },
+  { n: 18, ...MID,   honey: 4, seed: 1 },
+  { n: 20, ...HARD,  colors: 4, want: 0.52, honey: 3, vert: 0.5, seed: 1 },   // 18.11 ночь: честная раздача — 4 цвета (было 5)
+  // --- C. радужная (15–18): помощник после мёда — передышка перед ящиками ---
   { n: 21, layout: ['. . . . .', 'r . . . H', '. . . . .', 's . . . R', '. . . . .'], queue: ['h', 's'], every: 0, lesson: true },
-  { n: 22, ...EASY,  colors: 4, rainbow: 0.15, seed: 2 },
-  { n: 23, ...MID,   rainbow: 0.15, seed: 4 },
-  { n: 24, ...TOUGH, rainbow: 0.18, seed: 6 },
-  { n: 25, ...HARD,  rainbow: 0.12, vert: 0.5, seed: 10 },
-  // --- D. ящики ---
+  { n: 22, ...EASY,  colors: 4, rainbow: 0.15, seed: 23 },
+  { n: 23, ...MID,   rainbow: 0.15, seed: 8 },
+  { n: 25, ...HARD,  figs: 11, rainbow: 0.12, vert: 0.5, seed: 4 },   // 18.11 ночь: 11 фигур (было 13) — честная раздача
+  // --- D. ящики (19–22) ---
   { n: 26, layout: ['. h . . .', '. . # . .', '. . H x .'], queue: ['h'], crateGoal: 1, every: 0, lesson: true },
-  { n: 27, ...EASY,  stones: 0, crates: 3, crateGoal: 3, figs: 7, seed: 16 },
+  { n: 27, ...EASY,  stones: 0, crates: 3, crateGoal: 3, figs: 7, seed: 13 },
   { n: 28, ...MID,   crates: 4, crateGoal: 4, figs: 8, seed: 3 },
-  { n: 29, ...TOUGH, stones: 1, crates: 3, crateGoal: 3, figs: 10, seed: 0 },
-  { n: 30, ...HARD,  stones: 1, crates: 3, crateGoal: 3, figs: 10, honey: 3, seed: 5 },
-  // --- E. цепи ---
+  { n: 30, ...HARD,  stones: 1, crates: 3, crateGoal: 3, figs: 10, honey: 3, seed: 16 },
+  // --- E. цепи (23–26) ---
   { n: 31, layout: ['. c . s .', '. . . . .', '. . . . .', 'S* . C . .'], queue: ['c', 's'], every: 0, lesson: true },
-  { n: 32, ...EASY,  chains: 1, seed: 11 },
-  { n: 33, ...MID,   chains: 2, seed: 2 },
-  { n: 34, ...TOUGH, chains: 2, seed: 14 },   // 17.11: раздача больше не уходит из клетки призрака — переподбор (был 4)
-  { n: 35, ...HARD,  chains: 2, rainbow: 0.12, seed: 7 },
-  // --- F. таймер ---
+  { n: 32, ...EASY,  chains: 1, seed: 8 },
+  { n: 33, ...MID,   chains: 2, seed: 18 },
+  { n: 35, ...HARD,  chains: 2, rainbow: 0.12, seed: 0 },
+  // --- F. таймер (27–30) ---
   { n: 36, layout: ['h6 . . . .', '. . . . .', '. . . H .', '# . . . .', '. s . . S'], queue: ['h', 's'], every: 0, lesson: true },
-  { n: 37, ...EASY,  timerP: 0.25, timer: 8, seed: 0 },
-  { n: 38, ...MID,   timers: 1, timerP: 0.3, timer: 7, seed: 8 },   // 17.11: переподбор (был 1, потом 9 — после правила «ближайший заказ» и сдвига номеров)
-  { n: 39, ...TOUGH, timerP: 0.3, timer: 7, seed: 4 },
-  { n: 40, ...HARD,  want: 0.36, timerP: 0.25, timer: 8, chains: 2, seed: 2 },
-  // --- G. тесный лоток ---
-  { n: 41, ...EASY,  cap: 3, seed: 20 },
-  { n: 42, ...EASY,  colors: 4, figs: 10, cap: 3, seed: 15 },
+  { n: 37, ...EASY,  timerP: 0.25, timer: 8, seed: 5 },
+  { n: 38, ...MID,   timers: 1, timerP: 0.3, timer: 7, seed: 1 },   // 17.11: переподбор (был 1, потом 9 — после правила «ближайший заказ» и сдвига номеров)
+  { n: 40, ...HARD,  want: 0.36, timerP: 0.25, timer: 8, chains: 2, seed: 11 },
+  // --- G. тесный лоток (31–34) ---
+  { n: 41, ...EASY,  cap: 3, seed: 5 },
   { n: 43, ...MID,   cap: 3, vert: 0.4, seed: 2 },
-  { n: 44, ...TOUGH, cap: 3, want: 0.42, honey: 3, seed: 2 },
-  { n: 45, ...HARD,  cap: 3, want: 0.5, seed: 23 },
-  // --- экзамен: смеси, пила ---
-  { n: 46, ...EASY,  vert: 0.3, rainbow: 0.1, seed: 16 },
-  { n: 47, ...MID,   honey: 3, crates: 2, crateGoal: 2, figs: 8, seed: 1 },
-  { n: 48, ...HARD,  want: 0.52, chains: 2, vert: 0.4, seed: 1 },
-  { n: 49, ...EASY,  colors: 4, rainbow: 0.15, honey: 2, show: 3, seed: 3 },
-  { n: 50, ...HARD,  figs: 14, want: 0.4, vert: 0.4, honey: 2, show: 3, seed: 31 },
-  // ===== глава 2 (v0.8): смеси по 2 механики, новых нет. Блок из 5: лёгкий → средний → сложнее → лёгкий (передышка) → «сложный». =====
-  // --- H. верх/низ + радужная ---
-  { n: 51, ...EASY,  vert: 0.4, rainbow: 0.12, seed: 37 },
-  { n: 52, ...MID,   want: 0.56, vert: 0.45, rainbow: 0.12, seed: 25 },
-  { n: 53, ...TOUGH, want: 0.42, vert: 0.45, rainbow: 0.15, seed: 23 },
-  { n: 54, ...EASY,  colors: 4, vert: 0.4, rainbow: 0.15, seed: 7 },
-  { n: 55, ...HARD,  want: 0.52, vert: 0.45, rainbow: 0.12, seed: 13 },
-  // --- I. мёд + ящики ---
-  { n: 56, ...EASY,  stones: 0, honey: 3, crates: 2, crateGoal: 2, figs: 8, seed: 1 },
-  { n: 57, ...MID,   honey: 3, crates: 3, crateGoal: 3, figs: 8, seed: 17 },
-  { n: 58, ...TOUGH, honey: 3, crates: 3, crateGoal: 3, figs: 10, seed: 16 },
-  { n: 59, ...EASY,  colors: 4, honey: 2, crates: 2, crateGoal: 2, figs: 9, seed: 8 },
-  { n: 60, ...HARD,  honey: 3, crates: 3, crateGoal: 3, figs: 11, seed: 10 },
-  // --- J. цепи + таймер ---
-  { n: 61, ...EASY,  chains: 1, timerP: 0.2, timer: 8, seed: 11 },
-  { n: 62, ...MID,   chains: 2, timerP: 0.25, timer: 8, seed: 4 },
-  { n: 63, ...TOUGH, chains: 2, timerP: 0.25, timer: 7, seed: 3 },   // 17.11: переподбор после правила «ближайший заказ» (был 21)
-  { n: 64, ...EASY,  colors: 4, chains: 2, timerP: 0.2, timer: 8, seed: 11 },
-  { n: 65, ...HARD,  chains: 2, timerP: 0.22, timer: 8, seed: 1 },
-  // --- K. тесный лоток + таймер ---
-  { n: 66, ...EASY,  cap: 3, timerP: 0.2, timer: 8, seed: 29 },
-  { n: 67, ...MID,   cap: 3, want: 0.58, timerP: 0.25, timer: 8, seed: 0 },
-  { n: 68, ...TOUGH, cap: 3, want: 0.42, timerP: 0.25, timer: 7, seed: 3 },
-  { n: 69, ...EASY,  cap: 3, colors: 4, timerP: 0.2, timer: 8, seed: 6 },
-  { n: 70, ...HARD,  cap: 3, want: 0.5, timerP: 0.22, timer: 8, seed: 14 },
-  // --- L. три открытых заказа + цепи ---
-  { n: 71, ...EASY,  show: 3, chains: 1, seed: 12 },
-  { n: 72, ...MID,   show: 3, chains: 2, seed: 23 },
-  { n: 73, ...TOUGH, show: 3, chains: 2, seed: 13 },
-  { n: 74, ...EASY,  show: 3, colors: 4, chains: 2, seed: 25 },
-  { n: 75, ...HARD,  show: 3, chains: 2, figs: 14, seed: 8 },
-  // --- M. верх/низ + мёд ---
-  { n: 76, ...EASY,  vert: 0.4, honey: 3, seed: 9 },
+  { n: 44, ...TOUGH, cap: 3, want: 0.42, honey: 3, seed: 0 },
+  { n: 45, ...HARD,  cap: 3, want: 0.5, seed: 15 },
+  // --- экзамен (35–38): смеси, пила ---
+  { n: 46, ...EASY,  vert: 0.3, rainbow: 0.1, seed: 5 },
+  { n: 47, ...MID,   honey: 3, crates: 2, crateGoal: 2, figs: 8, seed: 16 },
+  { n: 49, ...EASY,  colors: 4, rainbow: 0.15, honey: 2, show: 3, seed: 11 },
+  { n: 50, ...HARD,  colors: 4, figs: 12, want: 0.5, vert: 0.4, honey: 2, show: 3, seed: 13 },   // 18.11 ночь: честная раздача — 4 цвета, 12 фигур (было 5 и 14, want 0,4)
+  // ===== глава 2 (v0.8; с 18.11 — с 39-го): смеси по 2 механики, новых нет. Блок из 5: лёгкий → средний → сложнее → лёгкий (передышка) → «сложный». =====
+  // --- H. верх/низ + радужная (39–43) ---
+  { n: 51, ...EASY,  vert: 0.4, rainbow: 0.12, seed: 7 },
+  { n: 52, ...MID,   want: 0.56, vert: 0.45, rainbow: 0.12, seed: 23 },
+  { n: 53, ...TOUGH, want: 0.54, vert: 0.45, rainbow: 0.15, seed: 13 },
+  { n: 54, ...EASY,  colors: 4, vert: 0.4, rainbow: 0.15, seed: 2 },
+  { n: 55, ...HARD,  want: 0.64, vert: 0.45, rainbow: 0.12, seed: 13 },
+  // --- I. мёд + ящики (44–48) ---
+  { n: 56, ...EASY,  stones: 0, honey: 3, crates: 2, crateGoal: 2, figs: 8, seed: 2 },
+  { n: 57, ...MID,   honey: 3, crates: 3, crateGoal: 3, figs: 8, seed: 2 },
+  { n: 58, ...TOUGH, want: 0.32, honey: 3, crates: 3, crateGoal: 3, figs: 10, seed: 14 },
+  { n: 59, ...EASY,  colors: 4, honey: 2, crates: 2, crateGoal: 2, figs: 9, seed: 24 },
+  { n: 60, ...HARD,  honey: 3, crates: 3, crateGoal: 3, figs: 11, seed: 21 },
+  // --- J. цепи + таймер (49–53) ---
+  { n: 61, ...EASY,  chains: 1, timerP: 0.2, timer: 8, seed: 0 },
+  { n: 62, ...MID,   chains: 2, timerP: 0.25, timer: 8, seed: 9 },
+  { n: 63, ...TOUGH, chains: 2, timerP: 0.25, timer: 7, seed: 9 },   // 17.11: переподбор после правила «ближайший заказ» (был 21)
+  { n: 64, ...EASY,  colors: 4, chains: 2, timerP: 0.2, timer: 8, seed: 0 },
+  { n: 65, ...HARD,  chains: 2, timerP: 0.22, timer: 8, seed: 24 },
+  // --- K. тесный лоток + таймер (54–58) ---
+  { n: 66, ...EASY,  cap: 3, timerP: 0.2, timer: 8, seed: 1 },
+  { n: 67, ...MID,   cap: 3, want: 0.58, timerP: 0.25, timer: 8, seed: 1 },
+  { n: 68, ...TOUGH, cap: 3, want: 0.3, timerP: 0.25, timer: 7, seed: 15 },
+  { n: 69, ...EASY,  cap: 3, colors: 4, timerP: 0.2, timer: 8, seed: 1 },
+  { n: 70, ...HARD,  cap: 3, want: 0.5, timerP: 0.22, timer: 8, seed: 25 },
+  // --- L. три открытых заказа + цепи (59–63) ---
+  { n: 71, ...EASY,  show: 3, chains: 1, seed: 10 },
+  { n: 72, ...MID,   show: 3, chains: 2, seed: 5 },
+  { n: 73, ...TOUGH, show: 3, chains: 2, seed: 1 },
+  { n: 74, ...EASY,  show: 3, colors: 4, chains: 2, seed: 3 },
+  { n: 75, ...HARD,  show: 3, chains: 2, figs: 14, seed: 27 },
+  // --- M. верх/низ + мёд (64–68) ---
+  { n: 76, ...EASY,  vert: 0.4, honey: 3, seed: 19 },
   { n: 77, ...MID,   want: 0.56, vert: 0.45, honey: 3, seed: 27 },
-  { n: 78, ...TOUGH, want: 0.42, vert: 0.45, honey: 4, seed: 1 },
-  { n: 79, ...EASY,  colors: 4, vert: 0.4, honey: 2, seed: 18 },
-  { n: 80, ...HARD,  want: 0.52, vert: 0.45, honey: 3, seed: 19 },
-  // --- N. радужная + ящики ---
-  { n: 81, ...EASY,  stones: 0, rainbow: 0.12, crates: 2, crateGoal: 2, figs: 8, seed: 7 },
-  { n: 82, ...MID,   rainbow: 0.12, crates: 3, crateGoal: 3, figs: 8, seed: 11 },
-  { n: 83, ...TOUGH, rainbow: 0.15, crates: 3, crateGoal: 3, figs: 10, seed: 0 },
-  { n: 84, ...EASY,  colors: 4, rainbow: 0.15, crates: 2, crateGoal: 2, figs: 8, seed: 13 },
-  { n: 85, ...HARD,  rainbow: 0.12, crates: 3, crateGoal: 3, figs: 11, seed: 0 },
-  // --- O. тесный лоток + верх/низ ---
-  { n: 86, ...EASY,  cap: 3, vert: 0.4, seed: 5 },
-  { n: 87, ...MID,   cap: 3, want: 0.58, vert: 0.4, seed: 8 },
-  { n: 88, ...TOUGH, cap: 3, want: 0.46, vert: 0.45, seed: 15 },
+  { n: 78, ...TOUGH, want: 0.5, vert: 0.45, honey: 4, seed: 17 },   // 18.11 ночь: want 0,42 → 0,5
+  { n: 79, ...EASY,  colors: 4, vert: 0.4, honey: 2, seed: 24 },
+  { n: 80, ...HARD,  figs: 11, want: 0.52, vert: 0.45, honey: 3, seed: 19 },   // 18.11 ночь: 11 фигур (было 13)
+  // --- N. радужная + ящики (69–73) ---
+  { n: 81, ...EASY,  stones: 0, rainbow: 0.12, crates: 2, crateGoal: 2, figs: 8, seed: 29 },
+  { n: 82, ...MID,   rainbow: 0.12, crates: 3, crateGoal: 3, figs: 8, seed: 4 },
+  { n: 83, ...TOUGH, rainbow: 0.15, crates: 3, crateGoal: 3, figs: 10, seed: 6 },
+  { n: 84, ...EASY,  colors: 4, rainbow: 0.15, crates: 2, crateGoal: 2, figs: 8, seed: 17 },
+  { n: 85, ...HARD,  want: 0.36, rainbow: 0.12, crates: 3, crateGoal: 3, figs: 11, seed: 0 },
+  // --- O. тесный лоток + верх/низ (74–78) ---
+  { n: 86, ...EASY,  cap: 3, vert: 0.4, seed: 19 },
+  { n: 87, ...MID,   cap: 3, want: 0.64, vert: 0.4, seed: 15 },
+  { n: 88, ...TOUGH, cap: 3, figs: 10, want: 0.6, vert: 0.45, seed: 20 },   // 18.11 ночь: честная раздача — 10 фигур (было 12), want 0,46 → 0,6
   { n: 89, ...EASY,  cap: 3, colors: 4, vert: 0.3, seed: 2 },
-  { n: 90, ...HARD,  cap: 3, want: 0.56, vert: 0.4, seed: 6 },
-  // --- P. три открытых заказа + таймер ---
-  { n: 91, ...EASY,  show: 3, timerP: 0.2, timer: 8, seed: 10 },
-  { n: 92, ...MID,   show: 3, timerP: 0.25, timer: 8, seed: 3 },
-  { n: 93, ...TOUGH, show: 3, timerP: 0.25, timer: 7, seed: 2 },
-  { n: 94, ...EASY,  show: 3, colors: 4, timerP: 0.2, timer: 8, seed: 34 },
-  { n: 95, ...HARD,  show: 3, timerP: 0.22, timer: 8, figs: 14, seed: 5 },
-  // --- финал главы: разные пары ---
-  { n: 96, ...EASY,  chains: 1, honey: 2, seed: 5 },
-  { n: 97, ...MID,   cap: 3, want: 0.58, rainbow: 0.12, seed: 12 },
-  { n: 98, ...TOUGH, vert: 0.4, crates: 2, crateGoal: 2, figs: 10, want: 0.42, seed: 16 },
-  { n: 99, ...EASY,  colors: 4, show: 3, honey: 2, rainbow: 0.1, seed: 19 },
-  { n: 100, ...HARD, figs: 15, want: 0.42, vert: 0.4, chains: 2, seed: 26 },
-  // 17.11: после свёртки уроков 1–3 в блок — два уровня в конец (в духе финального блока: смеси), чтобы осталось 100
-  { n: 101, ...EASY,  vert: 0.3, crates: 2, crateGoal: 2, figs: 10, seed: 37 },
-  { n: 102, ...MID,   honey: 2, timerP: 0.2, timer: 8, seed: 1 },
+  { n: 90, ...HARD,  cap: 3, want: 0.56, vert: 0.4, seed: 20 },
+  // --- P. три открытых заказа + таймер (79–83) ---
+  { n: 91, ...EASY,  show: 3, timerP: 0.2, timer: 8, seed: 25 },
+  { n: 92, ...MID,   show: 3, timerP: 0.25, timer: 8, seed: 16 },
+  { n: 93, ...TOUGH, show: 3, timerP: 0.25, timer: 7, seed: 8 },
+  { n: 94, ...EASY,  show: 3, colors: 4, timerP: 0.2, timer: 8, seed: 28 },
+  { n: 95, ...HARD,  show: 3, timerP: 0.22, timer: 8, figs: 12, seed: 3 },   // 18.11 ночь: 12 фигур (было 14)
+  // --- Q. мёд + цепи (84–88; 18.11 ночь — новый блок вместо уровней, ушедших из главы 1) ---
+  { n: 103, ...EASY,  honey: 3, chains: 1, seed: 5 },
+  { n: 104, ...MID,   honey: 3, chains: 2, seed: 7 },
+  { n: 105, ...TOUGH, want: 0.2, honey: 3, chains: 2, seed: 3 },
+  { n: 106, ...EASY,  colors: 4, honey: 2, chains: 1, seed: 9 },
+  { n: 107, ...HARD,  honey: 3, chains: 2, seed: 14 },
+  // --- R. радужная + таймер (89–93; 18.11 ночь — новый блок) ---
+  { n: 108, ...EASY,  rainbow: 0.12, timerP: 0.2, timer: 8, seed: 2 },
+  { n: 109, ...MID,   rainbow: 0.12, timerP: 0.25, timer: 8, seed: 3 },
+  { n: 110, ...TOUGH, want: 0.32, rainbow: 0.15, timerP: 0.25, timer: 7, seed: 12 },
+  { n: 111, ...EASY,  colors: 4, rainbow: 0.15, timerP: 0.2, timer: 8, seed: 27 },
+  { n: 112, ...HARD,  rainbow: 0.12, timerP: 0.22, timer: 8, seed: 27 },
+  // --- финал главы: разные пары (94–100) ---
+  { n: 96, ...EASY,  chains: 1, honey: 2, seed: 3 },
+  { n: 97, ...MID,   cap: 3, want: 0.58, rainbow: 0.12, seed: 0 },
+  { n: 98, ...TOUGH, vert: 0.4, crates: 2, crateGoal: 2, figs: 10, want: 0.42, seed: 3 },
+  { n: 99, ...EASY,  colors: 4, show: 3, honey: 2, rainbow: 0.1, seed: 14 },
+  { n: 100, ...HARD, figs: 15, want: 0.42, vert: 0.4, chains: 2, seed: 13 },
+  { n: 101, ...EASY,  vert: 0.3, crates: 2, crateGoal: 2, figs: 10, seed: 25 },
+  { n: 102, ...MID,   honey: 2, timerP: 0.2, timer: 8, seed: 6 },
 ];
 
 // После таблицы — по кругу с LOOP_FROM: уровень 101 повторяет LOOP_FROM, 102 — следующий и т. д. Поле и заказы те же
@@ -724,9 +739,129 @@ function tickTimers(s, ev){
   }
 }
 
+// Честная раздача (18.11, Андрей: «не должно быть ощущения, что тебе подыгрывают; и не должно быть ощущения, что не спаунят другие цвета»).
+// Мешок цветов: в каждом мешке — все цвета уровня по разу и E «нужных» жетонов (цвет открытого заказа, который ждёт дольше всех;
+// E = цветов × want × BAG_WANT_K, дробная часть — жребием). Раздача тянет жетон из мешка; мешок кончился — новый. Отсюда гарантии:
+//   • каждый цвет уровня приходит раз за мешок (нет «спаунит только звёзды» и нет «другие цвета не приходят»);
+//   • один цвет — не больше RUN_MAX раз подряд (иначе — другой жетон; если в мешке только он — любой другой цвет вне мешка);
+//   • нужный заказу цвет не ждёт больше WAIT_MAX раздач (жетон с ним берётся обязательно);
+//   • с вероятностью help из мешка берётся жетон, которым можно дать пару к одинокой половинке (иначе — новая половинка этого цвета);
+//   • клетка — случайная пустая; с вероятностью AVOID_INLINE — не «напротив пары» (не стыкуется одним свайпом и не сама), если такая клетка есть.
+// Урок раздачи (2-й) идёт по старому правилу (planNext ниже): там «под пару» и нужный цвет — суть урока.
+function oneSwipeAt(s, cell){                     // половинка в клетке cell (уже стоит) стыкуется сама или одним свайпом — её или пары
+  const { grid, w, h, floor } = s, code = grid[cell];
+  if (dockPartner(grid, w, h, cell, code) >= 0) return true;
+  grid[cell] = 0;
+  for (let d = 0; d < 4; d++){ const j = slideDest(grid, w, h, cell, d, floor); if (j !== cell && dockPartner(grid, w, h, j, code) >= 0){ grid[cell] = code; return true; } }
+  grid[cell] = code;
+  const want = sideOf(code) ^ 1;
+  for (let i = 0; i < grid.length; i++){ const v = grid[i]; if (i === cell || v <= 0 || isChained(v) || sideOf(v) !== want || !colorsMatch(v, code)) continue;
+    for (let d = 0; d < 4; d++){ const j = slideDest(grid, w, h, i, d, floor); if (j === i) continue; grid[i] = 0; const ok = dockPartner(grid, w, h, j, v) === cell; grid[i] = v; if (ok) return true; } }
+  return false;
+}
+function planFair(s){
+  const empties = [];
+  for (let i = 0; i < s.grid.length; i++) if (s.grid[i] === 0) empties.push(i);
+  const bal = [];                                    // [цвет][ось]: >0 — первых (левых/верхних) больше
+  for (let c = 0; c < s.colors; c++) bal.push([0, 0]);
+  for (const c of s.grid) if (c > 0 && colorOf(c) < s.colors){ const sd = sideOf(c); bal[colorOf(c)][sd >> 1] += (sd & 1) ? -1 : 1; }
+  const W = wantedColors(s), wl = []; for (let c = 0; c < s.colors; c++) if (W[c]) wl.push(c);
+  const dry = s.dry || [0, 0, 0, 0, 0], hist = s.hist || [], K = s.k;
+  let bag = s.bag && s.bag.length ? s.bag : null, bagN = s.bagN || 0;
+  if (!bag){
+    const e = s.colors * s.want * CFG.BAG_WANT_K, E = Math.floor(e) + (hashRand(s.seed, bagN, 21) < e - Math.floor(e) ? 1 : 0);
+    bag = []; for (let c = 0; c < s.colors; c++) bag.push(c); for (let k = 0; k < E; k++) bag.push(-1);
+    bagN++;
+  }
+  const lone = (c) => bal[c] && (bal[c][0] !== 0 || bal[c][1] !== 0);
+  const opts = [];                                   // { t — номер жетона в мешке (−1 — вне мешка), col }
+  const all = []; for (let c = 0; c < s.colors; c++) all.push(c);
+  bag.forEach((tok, t) => { if (tok >= 0) opts.push({ t, col: tok }); else for (const c of (wl.length ? wl : all)) opts.push({ t, col: c, wild: true }); });   // нужный жетон: цвет открытого заказа (заказов нет — любой)
+  let pool = opts;
+  const runCol = hist.length >= CFG.RUN_MAX && hist.slice(0, CFG.RUN_MAX).every(c => c === hist[0]) ? hist[0] : -1;
+  if (runCol >= 0){ const p2 = pool.filter(o => o.col !== runCol); if (p2.length) pool = p2;
+    else { const oth = []; for (let c = 0; c < s.colors; c++) if (c !== runCol) oth.push(c); pool = oth.map(c => ({ t: -1, col: c })); } }
+  let helped = false;
+  const starving = pool.filter(o => W[o.col] && dry[o.col] >= CFG.WAIT_MAX);
+  for (const c of wl) if (dry[c] >= CFG.WAIT_MAX && c !== runCol && !starving.some(o => o.col === c)) starving.push({ t: -1, col: c });   // в мешке нет жетона под него — вне мешка
+  if (starving.length){ const m = Math.max(...starving.map(o => dry[o.col])); pool = starving.filter(o => dry[o.col] === m); }
+  // Конец уровня отдельно не мешается (end_mix_chance — только прежнее правило): мешок и так даёт каждый цвет раз за мешок и не больше RUN_MAX подряд.
+  // Проба 18.11 ночью — «после нужного с вероятностью END_GAP_P чужой, в том числе вне мешка» — уронила «сложные» уровни (58-й 27 %, 98-й 21 %).
+  else if (hashRand(s.seed, K, 1) < s.help){ const lp = pool.filter(o => lone(o.col)); if (lp.length){ pool = lp; helped = true; } }
+  const toks = [...new Set(pool.map(o => o.t))], t = toks[Math.floor(hashRand(s.seed, K, 3) * toks.length)];
+  const cand = pool.filter(o => o.t === t), md = Math.max(...cand.map(o => dry[o.col])), top = cand.filter(o => dry[o.col] === md);
+  const col = top[Math.floor(hashRand(s.seed, K, 8) * top.length)].col;
+  let code;
+  if (helped){
+    const axes = [0, 1].filter(ax => bal[col][ax] !== 0), ax = axes[Math.floor(hashRand(s.seed, K, 16) * axes.length)];
+    code = pieceCode(s.rainbow && hashRand(s.seed, K, 6) < s.rainbow ? RAINBOW : col, ax * 2 + (bal[col][ax] > 0 ? 1 : 0));
+  } else {
+    const ax = s.vert && hashRand(s.seed, K, 9) < s.vert ? 1 : 0;
+    code = pieceCode(col, ax * 2 + (hashRand(s.seed, K, 4) < 0.5 ? 0 : 1));
+  }
+  if (s.timerP && hashRand(s.seed, K, 10) < s.timerP) code += 1000 * s.timer;
+  const dc = colorOf(code);                          // мешок, серия и ожидание меняются, когда половинка упала (spawn), а не при планировании: план могут заменить (догонялка, перепланировка)
+  const fs = { bag: t >= 0 ? bag.filter((x, i) => i !== t) : bag, bagN, hist: [dc].concat(hist).slice(0, 4), dry: dry.map((v, c) => !W[c] ? 0 : (c === dc || dc === RAINBOW) ? 0 : v + 1) };
+  const near = s.near && (s.nearP >= 1 || hashRand(s.seed, K, 11) < s.nearP);   // вводные до assist_until_level: «под пару» с вероятностью nearP
+  let cell = empties.length ? empties[Math.floor(hashRand(s.seed, K, 5) * empties.length)] : -1;
+  if (near && cell >= 0) cell = nearCell(s, code, cell);
+  else if (cell >= 0 && CFG.AVOID_INLINE > 0 && hashRand(s.seed, K, 14) < CFG.AVOID_INLINE){
+    s.grid[cell] = code; const bad = oneSwipeAt(s, cell); s.grid[cell] = 0;
+    if (bad){ const off = Math.floor(hashRand(s.seed, K, 15) * empties.length);
+      for (let q = 1; q < empties.length; q++){ const c2 = empties[(off + q) % empties.length]; s.grid[c2] = code; const b2 = oneSwipeAt(s, c2); s.grid[c2] = 0; if (!b2){ cell = c2; break; } } }
+  }
+  s.next = { code, cell, near, help: helped, fair: true, fs };
+}
+// Урок раздачи (2-й, 18.11 ночь): каждая раздача — пара к нужной заказу половинке, которой сейчас не с кем стыковаться одним свайпом, в клетку «в ряд» с ней
+// (свайп любой из двух стыкует); таких нет (все нужные уже «в один свайп» или прижаты к «не той» стене) — новая половинка нужного цвета, следующая раздача — пара к ней.
+// «Чужих» цветов и случайных клеток на уроке нет: призрак → падает → собирается одним свайпом.
+function lessonHalf(s, pref, wl){                  // урок: половинка нужного цвета в клетку, где стыкуется одним свайпом именно она (не сама, вплотную); ближе к pref
+  const px = pref % s.w, py = (pref - px) / s.w; let best = null;
+  for (const col of wl) for (let sd = 0; sd < (s.vert ? 4 : 2); sd++){ const code = pieceCode(col, sd);
+    for (let i = 0; i < s.grid.length; i++){ if (s.grid[i] !== 0) continue;
+      s.grid[i] = code; const ok = dockPartner(s.grid, s.w, s.h, i, code) < 0 && oneSwipeAt(s, i); s.grid[i] = 0;
+      if (!ok) continue; const x = i % s.w, d = Math.abs(x - px) + Math.abs((i - x) / s.w - py);
+      if (!best || d < best.d) best = { code, cell: i, d }; } }
+  return best;
+}
+function planLesson(s){
+  // Нужный цвет — с учётом пар, которые уже стыкуются одним свайпом (игрок их сейчас и соберёт): иначе урок дал бы половинку под заказ,
+  // который закроется ближайшим ходом (так было с первой раздачей после руки). Всё нужное уже «в один свайп» — цвет следующего заказа очереди.
+  const need = [0, 0, 0, 0, 0], ready = [0, 0, 0, 0, 0], cands = [], wl = [];
+  for (const o of s.active) if (o) o.c.forEach((c, k) => { if (!o.f[k]) need[c]++; });
+  for (let i = 0; i < s.grid.length; i++){ const v = s.grid[i]; if (v > 0 && colorOf(v) < 5 && oneSwipeAt(s, i)) ready[colorOf(v)] += 0.5; }
+  const W = need.map((n, c) => n - Math.ceil(ready[c]) > 0);
+  if (!W.some(Boolean) && s.oi < s.queue.length) for (const c of s.queue[s.oi]) W[c] = true;
+  if (!W.some(Boolean)) wantedColors(s).forEach((b, c) => { W[c] = b; });
+  for (let c = 0; c < s.colors; c++) if (W[c]) wl.push(c);
+  for (let i = 0; i < s.grid.length; i++){ const v = s.grid[i];
+    if (v <= 0 || isChained(v) || colorOf(v) === RAINBOW || !W[colorOf(v)] || oneSwipeAt(s, i)) continue;
+    const comp = pieceCode(colorOf(v), sideOf(v) ^ 1); if (lineFits(s, comp)) cands.push(comp); }
+  const empties = []; for (let i = 0; i < s.grid.length; i++) if (s.grid[i] === 0) empties.push(i);
+  const pref = empties.length ? empties[Math.floor(hashRand(s.seed, s.k, 5) * empties.length)] : -1;
+  let code, cell = pref;
+  if (cands.length && pref >= 0){
+    // Из пар — та, что не перекрывает ряд другой нужной половинке (иначе следующей раздаче некуда встать «в ряд»).
+    let best = null;
+    const fut = new Set(); for (const o of s.active) if (o) o.c.forEach(c => fut.add(c)); for (let q = s.oi; q < s.queue.length; q++) s.queue[q].forEach(c => fut.add(c));
+    const later = []; for (let i = 0; i < s.grid.length; i++){ const v = s.grid[i]; if (v > 0 && !isChained(v) && colorOf(v) < 5 && fut.has(colorOf(v)) && !oneSwipeAt(s, i)) later.push(pieceCode(colorOf(v), sideOf(v) ^ 1)); }   // пары, которые понадобятся позже (заказы в очереди)
+    cands.forEach((cc, k) => { const c1 = nearCell(s, cc, pref); s.grid[c1] = cc; const keep = later.filter(o => o !== cc && lineFits(s, o)).length; s.grid[c1] = 0;
+      const sc = keep * 10 + hashRand(s.seed, s.k * 7 + k, 2); if (!best || sc > best.sc) best = { sc, cc, c1 }; });
+    code = best.cc; cell = best.c1;
+  } else if (pref >= 0 && (code = lessonHalf(s, pref, wl))){   // в ряд не встать (пара прижата) — половинка туда, где именно она стыкуется одним свайпом (пара съедет к ней)
+    cell = code.cell; code = code.code;
+  } else {
+    code = pieceCode(wl.length ? wl[Math.floor(hashRand(s.seed, s.k, 8) * wl.length)] : Math.floor(hashRand(s.seed, s.k, 3) * s.colors), hashRand(s.seed, s.k, 4) < 0.5 ? 0 : 1);
+    if (pref >= 0){ const ok = empties.filter(i => { s.grid[i] = code; const f = lineFits(s, pieceCode(colorOf(code), sideOf(code) ^ 1)); s.grid[i] = 0; return f; });   // новой половинке — клетка, к которой паре потом есть куда встать «в ряд»
+      if (ok.length) cell = ok.reduce((b, i) => { const d = Math.abs(i % s.w - pref % s.w) + Math.abs(Math.floor(i / s.w) - Math.floor(pref / s.w)), db = Math.abs(b % s.w - pref % s.w) + Math.abs(Math.floor(b / s.w) - Math.floor(pref / s.w)); return d < db ? i : b; }, ok[0]); }
+  }
+  s.next = { code, cell, near: true, help: cands.length > 0 };
+}
 // Следующая раздача: какая половинка и куда. Решается сразу после хода — игрок видит её заранее.
 // С вероятностью help — пара к одинокой половинке на поле, иначе новая; с вероятностью want цвет берётся из открытых заказов.
 function planNext(s){
+  if (s.lesson) return planLesson(s);
+  if (s.fair) return planFair(s);
   const empties = [];
   for (let i = 0; i < s.grid.length; i++) if (s.grid[i] === 0) empties.push(i);
   const bal = [];                                    // [цвет][ось]: >0 — первых (левых/верхних) больше
@@ -740,8 +875,9 @@ function planNext(s){
   for (let c = 0; c < s.colors; c++) for (let ax = 0; ax < 2; ax++) if (bal[c][ax]) lonely.push([c, ax]);
   let code; const near = s.near && (s.nearP >= 1 || hashRand(s.seed, s.k, 11) < s.nearP);   // «под пару» в этой раздаче (вероятность nearP)
   if (gap) lonely = lonely.filter(q => !W[q[0]]);
+  let helped = false;
   if (lonely.length && hashRand(s.seed, s.k, 1) < s.help){
-    const lw = lonely.filter(q => W[q[0]]); if (biased && lw.length) lonely = lw;
+    helped = true; const lw = lonely.filter(q => W[q[0]]); if (biased && lw.length) lonely = lw;
     if (near){ const ok = lonely.filter(q => lineFits(s, pieceCode(q[0], q[1] * 2 + (bal[q[0]][q[1]] > 0 ? 1 : 0)))); if (ok.length) lonely = ok; }   // урок: пару даём той, к которой можно встать в ряд (не прижатой к «не той» стене)
     const [col, ax] = lonely[Math.floor(hashRand(s.seed, s.k, 2) * lonely.length)];
     const side = ax * 2 + (bal[col][ax] > 0 ? 1 : 0);
@@ -758,7 +894,7 @@ function planNext(s){
   if (s.timerP && hashRand(s.seed, s.k, 10) < s.timerP) code += 1000 * s.timer;
   let cell = empties.length ? empties[Math.floor(hashRand(s.seed, s.k, 5) * empties.length)] : -1;
   if (near && cell >= 0) cell = nearCell(s, code, cell);
-  s.next = { code, cell, near };                     // near — клетка выбрана «под пару» (для замера audit/assist.mjs)
+  s.next = { code, cell, near, help: helped };       // near — клетка выбрана «под пару», help — пара к одинокой (для замера audit/assist.mjs, audit/gen.mjs)
 }
 // Раздача «под пару» (урок раздачи, spec.near): клетка, встав в которую, новая половинка стыкуется со своей парой одним свайпом
 // (её или пары) — в ряд или в столбец с парой, путь свободен. Сразу вплотную (сама состыкуется) — только если иначе нельзя.
@@ -774,8 +910,8 @@ function dockInOne(s){
 let NEAR_DEPTH = 0;                                  // > 0 — идёт проверка ходов внутри правила «под пару»: вложенные applyMove его не применяют
 // Половинка «для заказа» (17.11): какую половинку нужного заказам цвета и в какую клетку положить, чтобы появилась стыковка под заказ одним свайпом.
 // Сначала — места, где пару соберёт сам игрок (не вплотную), ближе к from; иначе — вплотную (стыкуется сама, «Подарок!»). null — некуда.
-function orderHalf(s, from){
-  const W = wantedColors(s), sides = s.vert ? 4 : 2, fx = from % s.w, fy = (from - fx) / s.w, nr = s.near; let best = null;
+function orderHalf(s, from, Wo){                     // Wo — свой набор нужных цветов (урок раздачи: без заказов, которые закроет ближайший ход)
+  const W = Wo || wantedColors(s), sides = s.vert ? 4 : 2, fx = from % s.w, fy = (from - fx) / s.w, nr = s.near; let best = null;
   s.near = false;                                   // проверка ходов внутри (orderMoves → applyMove) это правило не запускает
   for (let col = 0; col < 5; col++){ if (!W[col]) continue;
     for (let sd = 0; sd < sides; sd++){ const code = pieceCode(col, sd);
@@ -816,7 +952,7 @@ function nearCell(s, code, pref){
     if (s.grid[i] !== 0) continue;
     const x = i % s.w, dd = Math.abs(x - px) + Math.abs((i - x) / s.w - py);
     s.grid[i] = code;
-    const t = dockPartner(s.grid, s.w, s.h, i, code) >= 0 ? 2 : inLine(s, i, code) ? 0 : dockInOne(s) ? 1 : -1;
+    const t = dockPartner(s.grid, s.w, s.h, i, code) >= 0 ? 2 : inLine(s, i, code) ? 0 : oneSwipeAt(s, i) ? 1 : -1;   // 18.11: 1 — стыкуется одним свайпом именно новая половинка (раньше dockInOne — любая стыковка на поле, и призрак вставал куда попало)
     s.grid[i] = 0;
     if (t >= 0 && dd < bd[t]){ bd[t] = dd; best[t] = i; }
   }
@@ -834,9 +970,12 @@ function spawn(s, ev, by){
   // 17.11 (баг Андрея «временные фигуры меняют свой грид на соседний»): показанная клетка призрака не меняется, пока её не заняли.
   // Раньше при падении раздача перепланировалась (near: «пара не в ряд») и сдвигалась (near-подстройка, переполнение лотка) — без занятия клетки.
   const want = s.next.cell, code = s.next.code, nearUsed = !!s.next.near;
-  const wantCol = (() => { const W = wantedColors(s), c = colorOf(code); return c === RAINBOW || !!W[c]; })(), endPhase = s.oi >= s.queue.length;   // замер: нужный цвет, конец уровня
+  const W0 = wantedColors(s), c0 = colorOf(code), wantCol = c0 === RAINBOW || !!W0[c0], endPhase = s.oi >= s.queue.length;   // замер: нужный цвет, конец уровня
+  const wmask = W0.reduce((m, b, c) => m | (b ? 1 << c : 0), 0), helped = !!s.next.help;   // замер (audit/gen.mjs): какие цвета были нужны в момент падения; раздача — пара к одинокой
   let cell = want >= 0 && s.grid[want] === 0 ? want : nearestEmpty(s.grid, s.w, Math.max(0, want));   // заняли — в ближайшую пустую (вид показывает переезд)
   if (cell < 0) return null;
+  if (s.next.fs){ const f = s.next.fs; s.bag = f.bag; s.bagN = f.bagN; s.hist = f.hist; s.dry = f.dry; }   // честная раздача: жетон списан, серия и ожидание обновлены
+  if (s.lesson && nearUsed){ s.grid[cell] = code; const ok = oneSwipeAt(s, cell); s.grid[cell] = 0; if (!ok) cell = nearCell(s, code, cell); }   // урок раздачи: игрок сдвинул пару — половинка встаёт туда, где стыкуется одним свайпом (вид показывает переезд)
   const over = spawnOverflows(s, cell, code);        // стыковка переполнила бы лоток — половинка встаёт в свою клетку, но сама не стыкуется
   s.grid[cell] = code;
   const partner = over ? -1 : dockPartner(s.grid, s.w, s.h, cell, code), partnerCode = partner >= 0 ? s.grid[partner] : 0;
@@ -844,7 +983,7 @@ function spawn(s, ev, by){
   if (partner >= 0){ const d = dock(s, cell, partner, ev, by || 'spawn'); color = d.color; target = d.target; }
   s.k++;
   planNext(s);
-  return { cell, code, partner, partnerCode, planned: want, color, target, nearUsed, wantCol, endPhase };
+  return { cell, code, partner, partnerCode, planned: want, color, target, nearUsed, wantCol, endPhase, wmask, helped };
 }
 
 // Ходить нечем, а место на поле есть (поле опустело — раздача сама состыковалась с последней плиткой, метла всё смела,
@@ -880,6 +1019,7 @@ function makeState(li, spec, grid, w, h, seed, floor){
     crateGoal: spec.crateGoal || 0, hard: !!spec.hard,
     every: spec.every || 0, colors: spec.colors || 5, help: spec.help === undefined ? 0.8 : spec.help,
     vert: spec.vert || 0, rainbow: spec.rainbow || 0, timerP: spec.timerP || 0, timer: spec.timer || 8,
+    lesson: !!spec.lesson, fair: !!CFG.FAIR && !spec.lesson, bag: null, bagN: 0, hist: [], dry: [0, 0, 0, 0, 0],   // честная раздача (planFair); урок раздачи — по старому правилу
     deal: spec.deal || CFG.DEAL, near: !!spec.near, nearP: spec.nearP === undefined ? CFG.ASSIST_PAIR : spec.nearP, gap: 0, due: false, idle: 0,
     catchup: spec.catchup !== undefined ? spec.catchup : spec.near ? 2 : 0, k: 0, moves: 0, docks: 0, crates: 0, dead: false, next: null, last: null };
   for (let a = 0; a < s.show; a++) s.active.push(s.oi < queue.length ? newOrder(s) : null);
@@ -1007,7 +1147,7 @@ function applyMove(s, m){
   // Догонялка (17.11; 18.11 — только когда игрок реально застрял): CATCHUP_AFTER ходов подряд без стыковки и на поле нет ни одной стыковки —
   // в тот же ход приходит половинка под заказ (или пара в ряд). catchup 2 — на любом этапе (вводные до assist_until_level), 1 — только в конце уровня.
   n.idle = p >= 0 ? 0 : (s.idle || 0) + 1;
-  if (n.catchup && last.spawn && NEAR_DEPTH === 0 && n.idle >= CFG.CATCHUP_AFTER && (n.catchup >= 2 || n.oi >= n.queue.length) &&
+  if (n.catchup && last.spawn && NEAR_DEPTH === 0 && n.idle >= (n.lesson ? 0 : CFG.CATCHUP_AFTER) &&   // урок раздачи: после любого хода на поле есть стыковка под заказ (как 17.11 — урок проходится ход в ход) (n.catchup >= 2 || n.oi >= n.queue.length) &&
       !isWin(n) && !isLose(n) && !n.trayOver && ordersLeft(n) && n.grid.indexOf(0) >= 0 && dockMoves(n).length === 0){
     n.idle = 0; NEAR_DEPTH++;
     const pick = orderHalf(n, last.spawn.cell), picks = pick ? [pick] : orderPair(n, last.spawn.cell);   // одной половинкой не выходит (одинокие у стен) — пара целиком, в ряд
@@ -1264,13 +1404,20 @@ function readSdkConfig(){
     CFG.FIGS_SCALE = rng('figs_scale', CFG.FIGS_SCALE, 0.5, 2);                                         // множитель длины уровней
     CFG.DOCK_DEAL = rng('deal_after_dock_chance', CFG.DOCK_DEAL, 0, 1);                                 // 18.11: раздача после стыковки (уровни miss)
     CFG.CATCHUP_AFTER = int(get('catchup_after_moves', CFG.CATCHUP_AFTER), CFG.CATCHUP_AFTER, 1, 20);   // догонялка: ходов без стыковки
-    CFG.END_GAP_P = rng('end_mix_chance', CFG.END_GAP_P, 0, 1);                                        // конец уровня: «чужой» цвет после нужного
+    CFG.END_GAP_P = rng('end_mix_chance', CFG.END_GAP_P, 0, 1);                                        // конец уровня: «чужой» цвет после нужного (только при fair_deal false)
+    // 18.11 ночь: честная раздача — мешок цветов (planFair; DESIGN «Урок 2 и честная раздача»)
+    { const f = val(get('fair_deal', CFG.FAIR)); if (f === true || f === false) CFG.FAIR = f; }
+    CFG.BAG_WANT_K = rng('bag_want_k', CFG.BAG_WANT_K, 0, 4);                                          // «нужных» жетонов в мешке: цветов × want × K
+    CFG.RUN_MAX = int(get('same_color_run_max', CFG.RUN_MAX), CFG.RUN_MAX, 1, 5);                      // один цвет подряд — не больше
+    CFG.WAIT_MAX = int(get('wanted_wait_max', CFG.WAIT_MAX), CFG.WAIT_MAX, 2, 20);                     // нужный цвет — не реже чем раз в N раздач
+    CFG.AVOID_INLINE = rng('avoid_inline_chance', CFG.AVOID_INLINE, 0, 1);                             // увести с клетки «напротив пары»
     const dm = val(get('deal_mode', CFG.DEAL)); if (dm === 'miss' || dm === 'each') CFG.DEAL = dm;     // раздача: после хода без стыковки | каждый ход
     applyLevelOverrides(val(get('level_overrides', {})), (n, next) => log('event', 'remote.level', n + ' ' + JSON.stringify(next)));
     log('event', 'remote', 'skip=' + RC.skip_levels.join(',') + ' loop=' + CFG.LOOP_FROM + ' inter=' + CFG.INTER_FROM + ' boost=' + CFG.BOOST_START + '/' + RC.boosts_per_ad +
       ' cap+' + CFG.TRAY_PLUS + ' revive=' + CFG.REVIVE_PAIRS + 'x' + RC.revives_per_level + (RC.free_revive ? ' free' : '') + ' want+' + CFG.WANT_BONUS + ' deal=' + CFG.DEAL +
       ' assist<=' + CFG.ASSIST_UNTIL + 'x' + CFG.ASSIST_PAIR + ' each<=' + CFG.DEAL_EACH_UNTIL + ' help*' + CFG.HELP_SCALE + ' figs*' + CFG.FIGS_SCALE +
-      ' dockdeal=' + CFG.DOCK_DEAL + ' catchup>=' + CFG.CATCHUP_AFTER + ' endmix=' + CFG.END_GAP_P);
+      ' dockdeal=' + CFG.DOCK_DEAL + ' catchup>=' + CFG.CATCHUP_AFTER + ' endmix=' + CFG.END_GAP_P +
+      ' fair=' + CFG.FAIR + ' bag*' + CFG.BAG_WANT_K + ' run<=' + CFG.RUN_MAX + ' wait<=' + CFG.WAIT_MAX + ' avoid=' + CFG.AVOID_INLINE);
   } catch (e) { log('event', 'remote', 'sdk-error'); }
   RC.deal = CFG.DEAL;
 }
@@ -1281,10 +1428,25 @@ function log(kind, name, info){            // журнал [game] — одна �
 const SAVE_KEY = SKIN === 'royal' ? 'snaphalves-royal-j2.v1' : SKIN === 'candy' ? 'snaphalves-candy.v1' : NAME + '.v1';   // у royal свой сейв: обе ссылки Pages на одном домене, прогресс не смешиваем
 // 17.11: уроки 1–3 свёрнуты в один уровень — прогресс сдвигается на −2 (не ниже 1-го), лучшие результаты — тоже. Один раз (v: 2).
 function migrateSave(sv){
-  if ((sv.v || 1) >= 2) return sv;
-  const had = sv.level > 0 || Object.keys(sv.best || {}).length > 0;
-  if (had){ sv.level = Math.max(0, (sv.level || 0) - 2); const b = {}; for (const k in (sv.best || {})){ const n = Number(k) - 2; if (n >= 0) b[n] = sv.best[k]; } sv.best = b; }
-  sv.v = 2; return sv;
+  if ((sv.v || 1) < 2){
+    const had = sv.level > 0 || Object.keys(sv.best || {}).length > 0;
+    if (had){ sv.level = Math.max(0, (sv.level || 0) - 2); const b = {}; for (const k in (sv.best || {})){ const n = Number(k) - 2; if (n >= 0) b[n] = sv.best[k]; } sv.best = b; }
+    sv.v = 2;
+  }
+  // 18.11 ночь: новый график механик (верх/низ с 7-го, мёд с 11-го, блоки по 4). Уровни узнаём по внутреннему n: пройденные в старой таблице
+  // остаются пройденными, текущий — первый непройденный в новой (новые смеси Q, R не пройдены). Один раз (v: 3).
+  if (sv.v < 3){
+    const OLD_N = [1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50];
+    for (let n = 51; n <= 102; n++) OLD_N.push(n);
+    const lv = sv.level || 0;
+    if (lv > 0 && lv < OLD_N.length){
+      const done = new Set(OLD_N.slice(0, lv)), at = LEVELS.findIndex(L => !done.has(L.n));
+      const b = {}; for (const k in (sv.best || {})){ const n = OLD_N[Number(k)]; const i = LEVELS.findIndex(L => L.n === n); if (i >= 0) b[i] = sv.best[k]; } sv.best = b;
+      sv.level = at < 0 ? LEVELS.length - 1 : at;
+    } else if (lv >= OLD_N.length){ const b = {}; for (const k in (sv.best || {})){ const n = OLD_N[Number(k)]; const i = LEVELS.findIndex(L => L.n === n); if (i >= 0) b[i] = sv.best[k]; } sv.best = b; }   // за таблицей — круг, номер не трогаем
+    sv.v = 3;
+  }
+  return sv;
 }
 function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch (e) { return {}; } }
 function save(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(G.save)); } catch (e) {} }
@@ -3119,7 +3281,7 @@ function drawTray(c, g, now, kind){
 // На шаге «пара» касание в пятне сразу отдаёт свайп полю. Каждый шаг — один раз (G.save.tut; сброс прогресса в DEV его обнуляет).
 const TUT_ON = ROYAL, TUT_MS = 1800, TUT_DIM = 0.65;
 const TUT_DUR = { untray: 900, honey: 2600 };   // 18.11: урок мёда — пятно со свайпом держится дольше (рука успевает показать ход дважды)   // 17.11 (Андрей): фокус «лоток отдал фигуру в заказ» на 3-м — вдвое короче, и праздник после него тоже (G.winHoldK)
-const TUT_START = { 0: ['goal', 'pair'], 1: ['ghost'], 4: ['boosts'], 8: ['vert'], 13: ['honey'], 18: ['rainbow'], 23: ['crates'], 28: ['chain'], 33: ['timer'] };   // 17.11: уроки 1–3 — один блок, номера −2   // по индексу уровня
+const TUT_START = { 0: ['goal', 'pair'], 1: ['ghost'], 4: ['boosts'], 6: ['vert'], 10: ['honey'], 14: ['rainbow'], 18: ['crates'], 22: ['chain'], 26: ['timer'] };   // по индексу уровня (номер − 1); 18.11 ночь — новый график: верх/низ 7, мёд 11, радужная 15, ящики 19, цепи 23, таймер 27
 const TUT = { q: [], cur: null, t0: 0, cv: null, slot: -1, due: [] };
 // Событийный шаг — по времени, а не через очередь вида: новый ход догоняет вид (snapView) и стёр бы его.
 function tutAt(id, t, slot){ if (TUT_ON && !tutSeen(id) && !TUT.due.some(d => d.id === id)) TUT.due.push({ id, t, slot: slot === undefined ? -1 : slot }); }
